@@ -106,10 +106,18 @@ export type RemoveFromCartInput = z.infer<typeof RemoveFromCartSchema>;
 export type ClearCartInput = z.infer<typeof ClearCartSchema>;
 export type SkipDeliveryInput = z.infer<typeof SkipDeliverySchema>;
 export type UnskipDeliveryInput = z.infer<typeof UnskipDeliverySchema>;
+
+export const PrepareOrderConfirmationSchema = z.object({
+  date: DateSchema,
+  comment: z.string().max(500).optional().describe("Delivery instructions or comment"),
+  tip: z.number().min(0).max(100).optional().describe("Tip amount in dollars"),
+}).strict();
+
 export const ConfirmOrderSchema = z.object({
   date: DateSchema,
-  comment: z.string().optional().describe("Delivery instructions or comment"),
-  tip: z.number().min(0).optional().describe("Tip amount in dollars"),
+  confirmation_token: z.string().min(16).describe("One-time token returned by cookunity_prepare_order_confirmation"),
+  comment: z.string().max(500).optional().describe("Delivery instructions or comment"),
+  tip: z.number().min(0).max(100).optional().describe("Tip amount in dollars"),
 }).strict();
 
 export const NextDeliverySchema = z.object({
@@ -125,6 +133,7 @@ export const GetOrderHistorySchema = z.object({
   response_format: ResponseFormatSchema,
 }).strict();
 
+export type PrepareOrderConfirmationInput = z.infer<typeof PrepareOrderConfirmationSchema>;
 export type ConfirmOrderInput = z.infer<typeof ConfirmOrderSchema>;
 export type NextDeliveryInput = z.infer<typeof NextDeliverySchema>;
 export type GetOrderHistoryInput = z.infer<typeof GetOrderHistorySchema>;

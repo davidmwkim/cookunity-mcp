@@ -17,7 +17,11 @@ import type {
 import { ResponseFormat } from "../constants.js";
 import { getNextMonday, formatDelivery, handleError, toStructured } from "../services/helpers.js";
 
-export function registerDeliveryTools(server: McpServer, api: CookUnityAPI): void {
+type DeliveryToolOptions = {
+  allowMutations: boolean;
+};
+
+export function registerDeliveryTools(server: McpServer, api: CookUnityAPI, options: DeliveryToolOptions): void {
   server.registerTool(
     "cookunity_list_deliveries",
     {
@@ -163,11 +167,12 @@ Error Handling:
     }
   );
 
-  server.registerTool(
-    "cookunity_skip_delivery",
-    {
-      title: "Skip CookUnity Delivery",
-      description: `Skip a delivery week. IMPORTANT: Always call cookunity_list_deliveries first to get valid delivery dates — do NOT guess or calculate dates manually.
+  if (options.allowMutations) {
+    server.registerTool(
+      "cookunity_skip_delivery",
+      {
+        title: "Skip CookUnity Delivery",
+        description: `Skip a delivery week. IMPORTANT: Always call cookunity_list_deliveries first to get valid delivery dates — do NOT guess or calculate dates manually.
 
 Args:
   - date (string, required): YYYY-MM-DD delivery date to skip (must match an actual delivery date from cookunity_list_deliveries)
@@ -178,39 +183,39 @@ Error Handling:
   - Invalid date: returns available delivery dates
   - Past cutoff: returns error suggesting checking cutoff with list_deliveries
   - Already skipped: returns API error`,
-      inputSchema: SkipDeliverySchema,
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: true,
+        inputSchema: SkipDeliverySchema,
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: true,
+          openWorldHint: true,
+        },
       },
-    },
-    async (params: SkipDeliveryInput) => {
-      try {
-        // Validate date against actual upcoming deliveries
-        const days = await api.getUpcomingDays();
-        const validDates = days.map((d) => d.date);
-        if (!validDates.includes(params.date)) {
-          return { content: [{ type: "text", text: `Error: "${params.date}" is not a valid delivery date. Available dates: ${validDates.join(", ")}. Use cookunity_list_deliveries to see your delivery calendar.` }], isError: true };
+      async (params: SkipDeliveryInput) => {
+        try {
+          // Validate date against actual upcoming deliveries
+          const days = await api.getUpcomingDays();
+          const validDates = days.map((d) => d.date);
+          if (!validDates.includes(params.date)) {
+            return { content: [{ type: "text", text: `Error: "${params.date}" is not a valid delivery date. Available dates: ${validDates.join(", ")}. Use cookunity_list_deliveries to see your delivery calendar.` }], isError: true };
+          }
+          const result = await api.skipDelivery(params.date);
+          if (result.__typename === "OrderCreationError") {
+            return { content: [{ type: "text", text: `Error: ${result.error ?? "Failed to skip delivery"}. Check cutoff with cookunity_list_deliveries.` }], isError: true };
+          }
+          const output = { success: true, date: params.date, skip_id: result.id, message: `Delivery for ${params.date} has been skipped.` };
+          return { content: [{ type: "text", text: output.message }], structuredContent: toStructured(output) };
+        } catch (error) {
+          return handleError(error);
         }
-        const result = await api.skipDelivery(params.date);
-        if (result.__typename === "OrderCreationError") {
-          return { content: [{ type: "text", text: `Error: ${result.error ?? "Failed to skip delivery"}. Check cutoff with cookunity_list_deliveries.` }], isError: true };
-        }
-        const output = { success: true, date: params.date, skip_id: result.id, message: `Delivery for ${params.date} has been skipped.` };
-        return { content: [{ type: "text", text: output.message }], structuredContent: toStructured(output) };
-      } catch (error) {
-        return handleError(error);
       }
-    }
-  );
+    );
 
-  server.registerTool(
-    "cookunity_unskip_delivery",
-    {
-      title: "Unskip CookUnity Delivery",
-      description: `Unskip a previously skipped delivery week. IMPORTANT: Always call cookunity_list_deliveries first to get valid delivery dates — do NOT guess or calculate dates manually.
+    server.registerTool(
+      "cookunity_unskip_delivery",
+      {
+        title: "Unskip CookUnity Delivery",
+        description: `Unskip a previously skipped delivery week. IMPORTANT: Always call cookunity_list_deliveries first to get valid delivery dates — do NOT guess or calculate dates manually.
 
 Args:
   - date (string, required): YYYY-MM-DD delivery date to unskip (must match an actual delivery date from cookunity_list_deliveries)
@@ -220,33 +225,34 @@ Returns: Confirmation message
 Error Handling:
   - Invalid date: returns available delivery dates
   - Week not skipped: returns API error`,
-      inputSchema: UnskipDeliverySchema,
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: true,
+        inputSchema: UnskipDeliverySchema,
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: true,
+          openWorldHint: true,
+        },
       },
-    },
-    async (params: UnskipDeliveryInput) => {
-      try {
-        // Validate date against actual upcoming deliveries
-        const days = await api.getUpcomingDays();
-        const validDates = days.map((d) => d.date);
-        if (!validDates.includes(params.date)) {
-          return { content: [{ type: "text", text: `Error: "${params.date}" is not a valid delivery date. Available dates: ${validDates.join(", ")}. Use cookunity_list_deliveries to see your delivery calendar.` }], isError: true };
+      async (params: UnskipDeliveryInput) => {
+        try {
+          // Validate date against actual upcoming deliveries
+          const days = await api.getUpcomingDays();
+          const validDates = days.map((d) => d.date);
+          if (!validDates.includes(params.date)) {
+            return { content: [{ type: "text", text: `Error: "${params.date}" is not a valid delivery date. Available dates: ${validDates.join(", ")}. Use cookunity_list_deliveries to see your delivery calendar.` }], isError: true };
+          }
+          const result = await api.unskipDelivery(params.date);
+          if (result.__typename === "OrderCreationError") {
+            return { content: [{ type: "text", text: `Error: ${result.error ?? "Failed to unskip delivery"}.` }], isError: true };
+          }
+          const output = { success: true, date: params.date, message: `Delivery for ${params.date} has been unskipped.` };
+          return { content: [{ type: "text", text: output.message }], structuredContent: toStructured(output) };
+        } catch (error) {
+          return handleError(error);
         }
-        const result = await api.unskipDelivery(params.date);
-        if (result.__typename === "OrderCreationError") {
-          return { content: [{ type: "text", text: `Error: ${result.error ?? "Failed to unskip delivery"}.` }], isError: true };
-        }
-        const output = { success: true, date: params.date, message: `Delivery for ${params.date} has been unskipped.` };
-        return { content: [{ type: "text", text: output.message }], structuredContent: toStructured(output) };
-      } catch (error) {
-        return handleError(error);
       }
-    }
-  );
+    );
+  }
 
   server.registerTool(
     "cookunity_next_delivery",

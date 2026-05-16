@@ -15,6 +15,10 @@ import { registerDeliveryTools } from "./tools/deliveries.js";
 import { registerCartTools } from "./tools/cart.js";
 import { registerPricingTools } from "./tools/pricing.js";
 
+function envFlag(name: string): boolean {
+  return process.env[name]?.toLowerCase() === "true";
+}
+
 function createServer(): McpServer {
   const email = process.env.COOKUNITY_EMAIL;
   const password = process.env.COOKUNITY_PASSWORD;
@@ -30,12 +34,20 @@ function createServer(): McpServer {
   });
 
   const api = new CookUnityAPI(email, password);
+  const allowMutations = envFlag("COOKUNITY_ENABLE_MUTATIONS");
+  const allowConfirmOrder = envFlag("COOKUNITY_ENABLE_CONFIRM_ORDER");
 
   registerMenuTools(server, api);
   registerUserTools(server, api);
-  registerDeliveryTools(server, api);
-  registerCartTools(server, api);
+  registerDeliveryTools(server, api, { allowMutations });
+  registerCartTools(server, api, { allowMutations, allowConfirmOrder });
   registerPricingTools(server, api);
+
+  if (!allowMutations) {
+    console.error("CookUnity mutation tools are disabled. Set COOKUNITY_ENABLE_MUTATIONS=true to expose cart and delivery mutation tools.");
+  } else if (!allowConfirmOrder) {
+    console.error("CookUnity order placement is disabled. Set COOKUNITY_ENABLE_CONFIRM_ORDER=true to expose order confirmation tools.");
+  }
 
   return server;
 }
@@ -53,9 +65,22 @@ async function runHTTP(): Promise<void> {
     "@modelcontextprotocol/sdk/server/streamableHttp.js"
   );
 
+  const token = process.env.MCP_AUTH_TOKEN;
+  if (!token) {
+    throw new Error("MCP_AUTH_TOKEN is required when TRANSPORT=http. Use stdio for local-only usage, or set a strong bearer token for HTTP.");
+  }
+
   const server = createServer();
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: "64kb" }));
+
+  app.use((req, res, next) => {
+    if (req.get("Authorization") !== `Bearer ${token}`) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    next();
+  });
 
   app.post("/mcp", async (req, res) => {
     const transport = new StreamableHTTPServerTransport({
@@ -70,8 +95,9 @@ async function runHTTP(): Promise<void> {
   });
 
   const port = parseInt(process.env.PORT ?? "3000", 10);
-  app.listen(port, () => {
-    console.error(`CookUnity MCP server running on http://localhost:${port}/mcp`);
+  const host = process.env.HOST ?? "127.0.0.1";
+  app.listen(port, host, () => {
+    console.error(`CookUnity MCP server running on http://${host}:${port}/mcp`);
   });
 }
 
@@ -85,9 +111,12 @@ if (transport === "http") {
     console.error("Server error:", err);
     process.exit(1);
   });
-} else {
+} else if (transport === "stdio") {
   runStdio().catch((err) => {
     console.error("Server error:", err);
     process.exit(1);
   });
+} else {
+  console.error(`ERROR: Unsupported TRANSPORT value: ${transport}. Expected 'stdio' or 'http'.`);
+  process.exit(1);
 }

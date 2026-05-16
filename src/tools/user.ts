@@ -5,6 +5,24 @@ import type { GetUserInfoInput, ListOrdersInput, GetOrderHistoryInput } from "..
 import { ResponseFormat } from "../constants.js";
 import { handleError, toStructured } from "../services/helpers.js";
 
+function showSensitiveData(): boolean {
+  return process.env.COOKUNITY_SHOW_SENSITIVE_DATA?.toLowerCase() === "true";
+}
+
+function redactEmail(email: string | undefined): string | null {
+  if (!email) return null;
+  const [local, domain] = email.split("@");
+  if (!domain) return "redacted";
+  const visiblePrefix = local.slice(0, Math.min(2, local.length));
+  return `${visiblePrefix}${local.length > 2 ? "***" : "*"}@${domain}`;
+}
+
+function redactPayment(payment: string | null | undefined): string | null {
+  if (!payment) return null;
+  const last4 = payment.match(/\d{4}$/)?.[0];
+  return last4 ? `card ending in ${last4}` : "redacted";
+}
+
 export function registerUserTools(server: McpServer, api: CookUnityAPI): void {
   server.registerTool(
     "cookunity_get_user_info",
@@ -12,10 +30,12 @@ export function registerUserTools(server: McpServer, api: CookUnityAPI): void {
       title: "Get CookUnity User Info",
       description: `Get user profile, subscription plan, delivery schedule, addresses, and credits.
 
+Sensitive fields are redacted by default. Set COOKUNITY_SHOW_SENSITIVE_DATA=true to include full email and street address.
+
 Args:
   - response_format ('markdown'|'json'): Output format
 
-Returns (JSON): { id, name, email, plan_id, store_id, status, deliveryDays[], currentCredit, addresses[] }
+Returns (JSON): redacted profile, plan, deliveryDays[], currentCredit, and coarse address information by default
 
 Examples:
   - Get profile: {}
@@ -31,13 +51,36 @@ Examples:
     async (params: GetUserInfoInput) => {
       try {
         const user = await api.getUserInfo();
+        const includeSensitive = showSensitiveData();
+        const output = includeSensitive
+          ? user
+          : {
+              id: user.id,
+              name: user.name,
+              email: redactEmail(user.email),
+              status: user.status,
+              plan_id: user.plan_id,
+              store_id: user.store_id,
+              currentCredit: user.currentCredit,
+              deliveryDays: user.deliveryDays,
+              addresses: user.addresses.map((a) => ({
+                city: a.city,
+                region: a.region,
+                postcode: a.postcode,
+                isActive: a.isActive,
+              })),
+              redacted: true,
+              redaction_note: "Street address and full email are hidden by default. Set COOKUNITY_SHOW_SENSITIVE_DATA=true to reveal them.",
+            };
+
         if (params.response_format === ResponseFormat.JSON) {
-          return { content: [{ type: "text", text: JSON.stringify(user, null, 2) }], structuredContent: toStructured(user) };
+          return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }], structuredContent: toStructured(output) };
         }
+
         const lines = [
           `# CookUnity Profile`,
           `**Name**: ${user.name}`,
-          `**Email**: ${user.email}`,
+          `**Email**: ${includeSensitive ? user.email : redactEmail(user.email)}`,
           `**Status**: ${user.status}`,
           `**Plan ID**: ${user.plan_id}`,
           `**Credit**: $${user.currentCredit.toFixed(2)}`,
@@ -46,9 +89,14 @@ Examples:
           ...user.deliveryDays.map((d) => `- ${d.day}: ${d.time_start} – ${d.time_end}`),
           "",
           "## Addresses",
-          ...user.addresses.map((a) => `- ${a.street}, ${a.city}, ${a.region} ${a.postcode}${a.isActive ? " ✅" : ""}`),
+          ...user.addresses.map((a) => includeSensitive
+            ? `- ${a.street}, ${a.city}, ${a.region} ${a.postcode}${a.isActive ? " ✅" : ""}`
+            : `- ${a.city}, ${a.region} ${a.postcode}${a.isActive ? " ✅" : ""}`),
         ];
-        return { content: [{ type: "text", text: lines.join("\n") }], structuredContent: toStructured(user) };
+        if (!includeSensitive) {
+          lines.push("", "_Street address and full email redacted. Set COOKUNITY_SHOW_SENSITIVE_DATA=true to reveal them._");
+        }
+        return { content: [{ type: "text", text: lines.join("\n") }], structuredContent: toStructured(output) };
       } catch (error) {
         return handleError(error);
       }
@@ -112,6 +160,8 @@ Returns (JSON): { total, count, offset, has_more, orders[{ id, deliveryDate }] }
       title: "Get CookUnity Order History with Meals",
       description: `Get past order invoices with full meal details, prices, reviews, and billing breakdown for a date range. This is the only way to see what meals were in past deliveries.
 
+Sensitive payment/card display fields are redacted by default. Set COOKUNITY_SHOW_SENSITIVE_DATA=true to include the raw payment display value returned by CookUnity.
+
 IMPORTANT: Always call this tool FRESH when the user asks about past orders or meals. NEVER rely on cached or previously returned data.
 
 Args:
@@ -141,6 +191,7 @@ Error Handling:
     },
     async (params: GetOrderHistoryInput) => {
       try {
+        const includeSensitive = showSensitiveData();
         const invoices = await api.getInvoices(params.from, params.to, params.offset, params.limit);
         const total = invoices.length;
 
@@ -155,7 +206,8 @@ Error Handling:
           discount: inv.discount,
           credit_applied: inv.chargedCredit,
           total: inv.total,
-          payment: inv.ccNumber,
+          payment: includeSensitive ? inv.ccNumber : redactPayment(inv.ccNumber),
+          redacted: !includeSensitive,
           orders: inv.orders.map((order) => ({
             delivery_date: order.delivery_date,
             display_date: order.display_date,
@@ -188,6 +240,7 @@ Error Handling:
         for (const inv of formatted) {
           lines.push(`## Invoice ${inv.id} — ${inv.date}`);
           lines.push(`**Total**: $${inv.total.toFixed(2)} (subtotal $${inv.subtotal.toFixed(2)} + tax $${inv.taxes.toFixed(2)} + delivery $${inv.delivery_fee.toFixed(2)}${inv.tip > 0 ? ` + tip $${inv.tip.toFixed(2)}` : ""}${inv.discount > 0 ? ` − discount $${inv.discount.toFixed(2)}` : ""})`);
+          if (inv.payment) lines.push(`**Payment**: ${inv.payment}`);
           for (const order of inv.orders) {
             lines.push(`### Delivery: ${order.delivery_date} (${order.delivery_window})`);
             for (const item of order.items) {
@@ -198,6 +251,9 @@ Error Handling:
             }
           }
           lines.push("");
+        }
+        if (!includeSensitive) {
+          lines.push("_Payment display values are redacted by default. Set COOKUNITY_SHOW_SENSITIVE_DATA=true to reveal them._");
         }
         return { content: [{ type: "text", text: lines.join("\n") }], structuredContent: toStructured(output) };
       } catch (error) {

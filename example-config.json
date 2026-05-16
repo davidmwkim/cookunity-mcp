@@ -1,11 +1,12 @@
 {
-  "note": "Example Claude Desktop configuration",
+  "note": "Example Claude Desktop configuration using safer read-only stdio defaults",
   "mcpServers": {
     "cookunity": {
-      "command": "cookunity-mcp",
+      "command": "cookunity-mcp-server",
       "env": {
         "COOKUNITY_EMAIL": "your-email@example.com",
-        "COOKUNITY_PASSWORD": "your-password"
+        "COOKUNITY_PASSWORD": "your-password",
+        "TRANSPORT": "stdio"
       }
     }
   }
